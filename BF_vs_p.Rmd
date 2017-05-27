@@ -1,0 +1,129 @@
+---
+title: "The mysterious corrleation of BF and *p* under H0"
+output: 
+  rmdformats::html_clean:
+    highlight: kate
+---
+
+```{r knitr_init, echo=FALSE, cache=FALSE, message=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=TRUE,
+	             cache=TRUE,
+               prompt=FALSE,
+               comment=NA,
+               tidy=FALSE,
+               message=TRUE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+*NB: This is my first ever RMarkdown script! I expect it to be all kinds of faulty, please let me know about improvements.*
+
+First we install a few packages
+```{r, eval = FALSE}
+install.packages("BayesFactor")
+install.packages("compute.es")
+install.packages("ggplot2")
+install.packages("ggExtra")
+```
+
+# Background
+
+It all started with a tweet by Eiko Fried, who was puzzled about a high correlation between Bayes factors (BF) and *p*-values although BFs are said to be a "continuous measure of evidence" and *p*-values are not. This is because BFs compare evidence for H1 with evidence for H0. The smaller a BF10, the more (relative) evidence for H0, the larger it is, the more (relative) evidence for H1. *P*-values are different: When H0 is false, they are right-skewed (more small *p*-values, fewer large ones), but when H0 is true, they are uniformly distributed (all values between 0 and 1 are equally likely, the distribution is flat).
+
+Felix Schönbrodt pointed this out and explained that that probably meant BF and *p* would be highly correlated when H0 is false but not when H0 is true. I thought this idea was amazingly enlightening and tweeted a screenshot of the conversation: <https://twitter.com/annemscheel/status/867419377582432258>
+
+# The Rebuttal
+
+Unfortunately the idea turned out to be false. Richard Morey jumped in and made his point in an ingenious tweet that included his point *and* code to prove it: <https://twitter.com/richarddmorey/status/867439728257363971>
+
+Let's go through Richard's code bit by bit. 
+The first chunk simulates 10,000 *t*-values from the central distribution (this means that H0 is true and the values we get will be centred on 0) with 50 degrees of freedom and accompanying *p*-values. (Note that we didn't set a seed, so you will get slightly different values every time you run this script.)
+```{r TP}
+t=rt(1e4,50) 
+p=2*pt(-abs(t),50) 
+```
+
+The second bit uses the BayesFactor package and generates BFs for the *t*-values we just simulated. It will take a moment to compile.
+
+```{r BF, message=FALSE}
+library("BayesFactor")
+b=exp(sapply(t,function(t) 
+  BayesFactor::ttest.tstat(t,51)$bf)) 
+```
+
+Now we have 10,000 *p*-values and their respective BFs, drawn from a population in which the null is true. The *p*-distribution should be flat and the BF-distribution shouldn't, so surely they are not correlated, right...? Let's have a look. This bit gives a scatterplot of the log of BF and *p*:
+
+```{r BFplot}
+plot(p,b,log="xy") 
+```
+Wow! Well, that was unexpected. 
+
+Here is the correlation of log(p) and log(b):
+```{r BFcor}
+cor(log(p),log(b))
+```
+
+# Understanding, pt. 1
+
+I first found this puzzling, but then I realised: Just like BFs, *p*-values track evidence under the null. You will get large *p*-values for small effects and small *p*-values for large effects. The BF works the other way round and a bit differently, but the main principle is the same (smaller effects provide more evidence for H0). As you saw above, the code even generates *p*-values and BFs from the same *t*-values! So clearly they must have something in common.
+
+Ok. I got that. But now came befuddlement number 2: *P*-values "track" the effect size under H0. But effect size is not uniformly distributed under the null, it is normally distributed: Many small values and few extreme ones.  
+**Why the hell is the *p*-distribution flat under the null?**
+
+# Understanding, pt. 2
+
+I spent a good while plotting the data in all kinds of ways until I understood. The whole process felt very embarrassing, because this is such a basic and trivial aspect of *p*-values. But hey, that insight doesn't magically put knowledge into your head, so I guess it's better to understand this now than never, even if I wouldn't want my first-year stats lecturer to see this.
+
+First I calculated effect sizes (*d*) from the simulated t-distribution, because I feel more familiar with *d*. Then I created a plot that showed both the distribution of effect size and the corresponding *p*-distribution.
+
+We now calculate *d* and then additionally the absolute value of *d* to get a second plot with only positive values for the effect size distribution. This code is probably far from perfect - it's pretty slow and I'm sure there's a better way to solve this.
+
+
+```{r unicornmat}
+library("compute.es")
+d <- sapply(t,function(t)
+  compute.es::tes(t,26,26, verbose=FALSE)$d)
+absd <- abs(d)
+unicornmat <- cbind(d, absd, p)
+unicornmat <- as.data.frame(unicornmat)
+```
+
+# Scatterplot of *d* and *p* with marginal histograms
+Now we're ready to plot! We first create a scatterplot of *d* and *p* using ggplot2 and then add marginal histograms using ggExtra.
+
+```{r unicornplot, message=FALSE}
+library("ggplot2")
+library("ggExtra")
+
+unicornplot <- ggplot(unicornmat, aes(unicornmat$d, unicornmat$p)) + 
+  geom_point(shape=1) +
+  theme(text = element_text(size=15)) +
+  labs(title="Effect size (d) versus p-values") +
+  labs(x="effect size (d)", y="p-value")
+
+unicornplot <- ggExtra::ggMarginal(unicornplot, type = "histogram")
+unicornplot
+```
+
+You see that the *p*-value "tracks" the effect size, which is normally distributed, but the overall *p*-distribution is still flat! That's  because the same difference in *d* will give you a larger difference in *p* for small effect sizes and a smaller difference in *p* for large effect sizes. In other words: There are way fewer d-values in the tails of the distribution, but they are "concentrated" in very small bins on the *p*-distribution. I hope the plot gets the point across.
+
+And I'm embarrassed about this whole ordeal because *p*-values were of course constructed to behave in this exact way! 
+
+# Scatterplot of absolute *d* and *p* with marginal histograms
+Last plot of the day: We make the same plot as above, just with absolute values for *d*. In other words, all negative *d*s were added onto the positive side of the distribution.
+
+```{r absoluteunicornplot, message=FALSE}
+absoluteunicornplot <- ggplot(unicornmat, aes(unicornmat$absd, unicornmat$p)) +
+  geom_point(shape=1) + 
+  theme(text = element_text(size=15)) +
+  labs(title="Absolute effect size (d) versus p-values") +
+  labs(x="absolute effect size (d)", y="p-value")
+
+absoluteunicornplot <- ggExtra::ggMarginal(absoluteunicornplot, type = "histogram")
+absoluteunicornplot
+```
